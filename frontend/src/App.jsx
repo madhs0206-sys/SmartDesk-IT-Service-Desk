@@ -1,23 +1,38 @@
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 const API_URL = "https://smartdesk-backend-lzo2.onrender.com";
 
-const SLA_HOURS = { P1: 2, P2: 4, P3: 8, P4: 24 };
-const technicians = ["Unassigned", "Technician A", "Technician B", "Technician C"];
+const TECHNICIANS = [
+  "Unassigned",
+  "Technician A",
+  "Technician B",
+  "Technician C",
+];
 
-function normalizeTicket(ticket) {
+const STATUSES = [
+  "Open",
+  "Assigned",
+  "In Progress",
+  "Pending Vendor",
+  "Resolved",
+  "Closed",
+];
+
+const SLA_HOURS = { P1: 2, P2: 4, P3: 8, P4: 24 };
+
+function normalize(ticket) {
   return {
     ...ticket,
     id: ticket._id || ticket.id,
+    status: ticket.status || "Open",
+    priority: ticket.priority || "P3",
     technician: ticket.technician || "Unassigned",
     resolution: ticket.resolution || "",
-    impact: ticket.impact || "Low",
-    urgency: ticket.urgency || "Low",
   };
 }
 
-async function apiRequest(path, options = {}) {
+async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
@@ -29,13 +44,13 @@ async function apiRequest(path, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.error || "Request failed");
+    throw new Error(data.error || `Server error: ${response.status}`);
   }
 
   return data;
 }
 
-function getPriority(impact, urgency) {
+function priorityFrom(impact, urgency) {
   if (impact === "High" && urgency === "High") return "P1";
   if (
     (impact === "High" && urgency === "Medium") ||
@@ -45,142 +60,43 @@ function getPriority(impact, urgency) {
   return "P4";
 }
 
-function getSlaLabel(ticket) {
-  if (ticket.status === "Resolved") return "Completed";
+function sla(ticket) {
+  if (["Resolved", "Closed"].includes(ticket.status)) return "Completed";
+
   const deadline =
     new Date(ticket.createdAt).getTime() +
-    SLA_HOURS[ticket.priority] * 3600000;
-  const remaining = deadline - Date.now();
+    (SLA_HOURS[ticket.priority] || 8) * 3600000;
 
+  const remaining = deadline - Date.now();
   if (remaining <= 0) return "SLA BREACHED";
 
   const hours = Math.floor(remaining / 3600000);
   const minutes = Math.floor((remaining % 3600000) / 60000);
+
   return `${hours}h ${minutes}m left`;
 }
 
-function Layout({ children, role, page, setPage, onLogout }) {
-  const links = [
-    ["dashboard", "▦", "Dashboard"],
-    ["tickets", "▤", "Tickets"],
-    ["analytics", "◔", "Analytics"],
-    ["users", "♙", "Users"],
-    ["settings", "⚙", "Settings"],
-  ];
-
+function AppButton({ children, onClick, disabled, secondary = false }) {
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">S</div>
-          <div><strong>SmartDesk</strong><span>IT SERVICE MANAGEMENT</span></div>
-        </div>
-
-        <div className="workspace">
-          <div className="workspace-icon">IT</div>
-          <div><small>Workspace</small><b>IT Operations</b></div>
-          <span>⌄</span>
-        </div>
-
-        <div className="menu-label">MAIN MENU</div>
-        <nav>
-          {links.map(([id, icon, label]) => (
-            <button
-              key={id}
-              className={page === id ? "nav-item active" : "nav-item"}
-              onClick={() => setPage(id)}
-            >
-              <span className="nav-icon">{icon}</span>{label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-bottom">
-          <div className="help-card">
-            <div className="help-icon">?</div>
-            <b>Need assistance?</b>
-            <p>Check the support documentation.</p>
-            <button>View Help Center →</button>
-          </div>
-          <div className="profile">
-            <div className="avatar">MS</div>
-            <div className="profile-info"><b>Madhushree</b><span>{role}</span></div>
-            <button onClick={onLogout}>⋮</button>
-          </div>
-        </div>
-      </aside>
-
-      <main className="main">
-        <header className="topbar">
-          <div className="breadcrumbs">SmartDesk <span>/</span> {page}</div>
-          <div className="top-actions">
-            <button className="icon-button">⌕</button>
-            <button className="icon-button notification">♢<i /></button>
-            <div className="top-avatar">MS</div>
-          </div>
-        </header>
-        <div className="content">{children}</div>
-      </main>
-    </div>
+    <button
+      className={secondary ? "secondary-btn" : "primary-btn"}
+      onClick={onClick}
+      disabled={disabled}
+      type="button"
+    >
+      {children}
+    </button>
   );
 }
 
-function Badge({ children, type }) {
-  return <span className={`badge ${type || ""}`}>{children}</span>;
-}
+function App() {
+  const [role, setRole] = useState(null);
+  const [page, setPage] = useState("dashboard");
+  const [tickets, setTickets] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState({});
+  const [error, setError] = useState("");
 
-function Stat({ title, value, change, icon, type }) {
-  return (
-    <div className="stat-card">
-      <div className="stat-top">
-        <span>{title}</span><div className={`stat-icon ${type}`}>{icon}</div>
-      </div>
-      <strong>{value}</strong>
-      <div className="stat-change">{change}</div>
-    </div>
-  );
-}
-
-function PageHeader({ eyebrow, title, description, action }) {
-  return (
-    <div className="page-header">
-      <div>
-        <div className="eyebrow">{eyebrow}</div>
-        <h1>{title}</h1>
-        <p>{description}</p>
-      </div>
-      {action}
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return <label className="field"><span>{label}</span>{children}</label>;
-}
-
-function TicketRow({ ticket, admin = false }) {
-  return (
-    <div className="ticket-row">
-      <div className="ticket-main">
-        <span className="ticket-id">{ticket.id}</span>
-        <h4>{ticket.title}</h4>
-        <p>{ticket.category} · Created {new Date(ticket.createdAt).toLocaleDateString()}</p>
-      </div>
-      <Badge type={ticket.priority.toLowerCase()}>{ticket.priority}</Badge>
-      <Badge type={ticket.status.toLowerCase().replaceAll(" ", "-")}>{ticket.status}</Badge>
-      <div className="ticket-sla">
-        <span>SLA</span>
-        <b className={getSlaLabel(ticket) === "SLA BREACHED" ? "danger-text" : ""}>
-          {getSlaLabel(ticket)}
-        </b>
-      </div>
-      <div className="ticket-tech"><span>Assigned to</span><b>{ticket.technician}</b></div>
-      {admin && <span className="row-more">•••</span>}
-    </div>
-  );
-}
-
-function Employee({ tickets, createTicket, setPage }) {
   const [form, setForm] = useState({
     title: "",
     category: "Hardware",
@@ -188,330 +104,536 @@ function Employee({ tickets, createTicket, setPage }) {
     impact: "Low",
     urgency: "Low",
   });
-  const [saving, setSaving] = useState(false);
-  const priority = getPriority(form.impact, form.urgency);
 
-  const submit = async (e) => {
+  async function refreshTickets() {
+    const data = await request("/api/tickets");
+    setTickets(data.map(normalize));
+  }
+
+  useEffect(() => {
+    refreshTickets()
+      .catch((e) => setError(`Could not load tickets: ${e.message}`))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function createTicket(e) {
     e.preventDefault();
+
     if (!form.title.trim() || !form.description.trim()) {
-      alert("Please complete the ticket details.");
+      setError("Enter a title and description.");
       return;
     }
 
-    setSaving(true);
+    setError("");
+
     try {
-      await createTicket({
-        ...form,
-        priority,
-        status: "Open",
-        createdBy: "Madhushree",
+      const saved = await request("/api/tickets", {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          title: form.title.trim(),
+          priority: priorityFrom(form.impact, form.urgency),
+          status: "Open",
+          createdBy: "Employee",
+          technician: "Unassigned",
+        }),
       });
+
+      setTickets((old) => [normalize(saved), ...old]);
+
       setForm({
-        title: "", category: "Hardware", description: "",
-        impact: "Low", urgency: "Low",
+        title: "",
+        category: "Hardware",
+        description: "",
+        impact: "Low",
+        urgency: "Low",
       });
-      alert("Ticket created successfully!");
-    } catch (error) {
-      alert(`Could not create ticket: ${error.message}`);
-    } finally {
-      setSaving(false);
+
+      setPage("tickets");
+    } catch (e) {
+      setError(`Ticket creation failed: ${e.message}`);
     }
-  };
+  }
 
-  return (
-    <>
-      <PageHeader
-        eyebrow="EMPLOYEE PORTAL"
-        title="Good morning, Madhushree"
-        description="Create and track your IT support requests from one place."
-        action={<button className="primary-btn" onClick={() => document.getElementById("ticket-form")?.scrollIntoView()}>+ New Ticket</button>}
-      />
+  async function updateTicket(id, changes) {
+    setBusy((old) => ({ ...old, [id]: true }));
+    setError("");
 
-      <div className="hero employee-hero">
-        <div>
-          <div className="hero-tag">IT SUPPORT CENTER</div>
-          <h2>How can we help you today?</h2>
-          <p>Raise a request and our support team will take care of the rest.</p>
-          <div className="hero-points">
-            <span>✓ Automatic priority</span><span>✓ SLA monitoring</span><span>✓ Real-time updates</span>
-          </div>
-        </div>
-        <div className="hero-graphic">
-          <div className="floating-card one">✓ Ticket created</div>
-          <div className="floating-card two">⚡ SLA active</div>
-          <div className="hero-circle">S</div>
-        </div>
-      </div>
-
-      <div className="section-heading" id="ticket-form">
-        <div><h3>Submit a support request</h3><p>Tell us what you need help with.</p></div>
-      </div>
-
-      <form className="form-card" onSubmit={submit}>
-        <div className="form-grid">
-          <Field label="Issue title">
-            <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g. Laptop is not connecting to Wi-Fi" />
-          </Field>
-          <Field label="Category">
-            <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
-              <option>Hardware</option><option>Software</option><option>Network</option><option>Access</option>
-            </select>
-          </Field>
-          <Field label="Impact">
-            <select value={form.impact} onChange={e => setForm({ ...form, impact: e.target.value })}>
-              <option>Low</option><option>Medium</option><option>High</option>
-            </select>
-          </Field>
-          <Field label="Urgency">
-            <select value={form.urgency} onChange={e => setForm({ ...form, urgency: e.target.value })}>
-              <option>Low</option><option>Medium</option><option>High</option>
-            </select>
-          </Field>
-        </div>
-
-        <Field label="Description">
-          <textarea rows="4" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Describe the issue and any relevant details..." />
-        </Field>
-
-        <div className="priority-preview">
-          <div><span>Automatically calculated priority</span><b>Based on impact + urgency</b></div>
-          <Badge type={priority.toLowerCase()}>{priority}</Badge>
-          <div className="preview-sla"><span>SLA target</span><b>{SLA_HOURS[priority]} hours</b></div>
-        </div>
-        <div className="form-actions">
-          <button type="button" className="secondary-btn" onClick={() => alert("Drafts are not enabled yet.")}>Save Draft</button>
-          <button className="primary-btn" type="submit" disabled={saving}>{saving ? "Submitting..." : "Submit Ticket →"}</button>
-        </div>
-      </form>
-
-      <div className="section-heading">
-        <div><h3>My recent requests</h3><p>Track the progress of your support tickets.</p></div>
-        <button className="text-btn" onClick={() => setPage("tickets")}>View all →</button>
-      </div>
-      <div className="ticket-list">
-        {tickets.length === 0 ? <div className="empty">No tickets yet.</div> : tickets.slice(0, 5).map(ticket => <TicketRow key={ticket.id} ticket={ticket} />)}
-      </div>
-    </>
-  );
-}
-
-function Technician({ tickets, updateTicket }) {
-  const [busyId, setBusyId] = useState(null);
-  const change = async (ticket, changes) => {
-    setBusyId(ticket.id);
     try {
-      await updateTicket(ticket.id, changes);
-    } catch (error) {
-      alert(`Could not update ticket: ${error.message}`);
+      const saved = await request(`/api/tickets/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(changes),
+      });
+
+      const updated = normalize(saved);
+      setTickets((old) =>
+        old.map((ticket) => ticket.id === id ? updated : ticket)
+      );
+    } catch (e) {
+      setError(`Update failed: ${e.message}`);
+      throw e;
     } finally {
-      setBusyId(null);
+      setBusy((old) => ({ ...old, [id]: false }));
     }
-  };
+  }
 
-  const open = tickets.filter(t => t.status !== "Resolved").length;
-  const breached = tickets.filter(t => getSlaLabel(t) === "SLA BREACHED").length;
-  const resolved = tickets.filter(t => t.status === "Resolved").length;
+  const active = tickets.filter(
+    (t) => !["Resolved", "Closed"].includes(t.status)
+  ).length;
 
-  return (
-    <>
-      <PageHeader eyebrow="TECHNICIAN WORKSPACE" title="Support queue" description="Manage assigned incidents, SLA commitments and resolutions." action={<button className="secondary-btn" onClick={() => window.print()}>Export Queue</button>} />
-      <div className="stats-grid four">
-        <Stat title="Open Tickets" value={open} change="Currently active" icon="◫" type="blue" />
-        <Stat title="SLA Breached" value={breached} change="Requires attention" icon="!" type="red" />
-        <Stat title="Resolved" value={resolved} change="Completed tickets" icon="✓" type="green" />
-        <Stat title="Avg. Resolution" value="3.8h" change="This week" icon="◷" type="purple" />
-      </div>
+  const resolved = tickets.filter(
+    (t) => ["Resolved", "Closed"].includes(t.status)
+  ).length;
 
-      <div className="section-heading"><div><h3>Active queue</h3><p>Tickets requiring technician attention.</p></div></div>
-      <div className="tech-list">
-        {tickets.length === 0 && <div className="empty">No tickets available.</div>}
-        {tickets.map(ticket => (
-          <div className="tech-card" key={ticket.id}>
-            <div className="tech-card-top">
-              <div><span className="ticket-id">{ticket.id}</span><h3>{ticket.title}</h3><p>{ticket.description}</p></div>
-              <div className="tech-badges"><Badge type={ticket.priority.toLowerCase()}>{ticket.priority}</Badge><Badge type={ticket.status.toLowerCase().replaceAll(" ", "-")}>{ticket.status}</Badge></div>
-            </div>
-            <div className="tech-meta">
-              <div><span>Category</span><b>{ticket.category}</b></div>
-              <div><span>SLA</span><b className={getSlaLabel(ticket) === "SLA BREACHED" ? "danger-text" : ""}>{getSlaLabel(ticket)}</b></div>
-              <div>
-                <span>Assign technician</span>
-                <select disabled={busyId === ticket.id} value={ticket.technician} onChange={e => change(ticket, { technician: e.target.value, status: e.target.value === "Unassigned" ? "Open" : "Assigned" })}>
-                  {technicians.map(t => <option key={t}>{t}</option>)}
-                </select>
-              </div>
-              <div>
-                <span>Status</span>
-                <select disabled={busyId === ticket.id} value={ticket.status} onChange={e => change(ticket, { status: e.target.value })}>
-                  {["Open", "Assigned", "In Progress", "Pending Vendor", "Resolved"].map(s => <option key={s}>{s}</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="resolution-area">
-              <input placeholder="Add resolution notes..." value={ticket.resolution} onChange={e => change(ticket, { resolution: e.target.value })} />
-              <button className="primary-btn small" disabled={busyId === ticket.id} onClick={() => change(ticket, { status: "Resolved", resolvedAt: new Date().toISOString() })}>Save Resolution</button>
-            </div>
+  const breached = tickets.filter(
+    (t) => sla(t) === "SLA BREACHED"
+  ).length;
+
+  function statusControl(ticket) {
+    return (
+      <select
+        aria-label={`Status for ${ticket.title}`}
+        value={ticket.status}
+        disabled={!!busy[ticket.id]}
+        onChange={(e) =>
+          updateTicket(ticket.id, { status: e.target.value }).catch(() => {})
+        }
+      >
+        {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    );
+  }
+
+  function technicianControl(ticket) {
+    return (
+      <select
+        aria-label={`Technician for ${ticket.title}`}
+        value={ticket.technician}
+        disabled={!!busy[ticket.id]}
+        onChange={(e) => {
+          const technician = e.target.value;
+          updateTicket(ticket.id, {
+            technician,
+            status: technician === "Unassigned" ? "Open" : "Assigned",
+          }).catch(() => {});
+        }}
+      >
+        {TECHNICIANS.map((t) => <option key={t} value={t}>{t}</option>)}
+      </select>
+    );
+  }
+
+  function ticketCard(ticket) {
+    const canManage = role === "Technician" || role === "Admin";
+
+    return (
+      <article
+        key={ticket.id}
+        style={{
+          border: "1px solid #e1e5ef",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 14,
+          background: "white",
+          color: "#20243a",
+        }}
+      >
+        <div style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+        }}>
+          <div>
+            <small>{ticket.id}</small>
+            <h3 style={{ margin: "8px 0" }}>{ticket.title}</h3>
+            <p>{ticket.description}</p>
           </div>
+          <div>
+            <strong>{ticket.priority}</strong>
+            <p>{ticket.status}</p>
+          </div>
+        </div>
+
+        <p>
+          Category: {ticket.category} · Created by: {ticket.createdBy || "Employee"}
+        </p>
+        <p>
+          SLA: <strong style={{ color: sla(ticket) === "SLA BREACHED" ? "#c62828" : "inherit" }}>
+            {sla(ticket)}
+          </strong>
+        </p>
+        <p>Assigned to: {ticket.technician}</p>
+
+        {canManage && (
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 12,
+            marginTop: 14,
+          }}>
+            <label>
+              Assign technician
+              {technicianControl(ticket)}
+            </label>
+
+            <label>
+              Update status
+              {statusControl(ticket)}
+            </label>
+          </div>
+        )}
+
+        {role === "Technician" && (
+          <ResolutionEditor
+            ticket={ticket}
+            saving={!!busy[ticket.id]}
+            onSave={(resolution) =>
+              updateTicket(ticket.id, {
+                resolution,
+                status: "Resolved",
+                resolvedAt: new Date().toISOString(),
+              }).catch(() => {})
+            }
+          />
+        )}
+
+        {ticket.resolution && (
+          <p><strong>Resolution:</strong> {ticket.resolution}</p>
+        )}
+
+        {busy[ticket.id] && <small>Saving changes...</small>}
+      </article>
+    );
+  }
+
+  if (!role) {
+    return (
+      <main style={styles.login}>
+        <h1>SmartDesk</h1>
+        <p>IT Service Management</p>
+        <h2>Choose your role</h2>
+        {["Employee", "Technician", "Admin"].map((r) => (
+          <button key={r} style={styles.roleButton} onClick={() => {
+            setRole(r);
+            setPage("dashboard");
+            setError("");
+          }}>
+            Continue as {r}
+          </button>
         ))}
-      </div>
-    </>
-  );
-}
+        <p>Demo role selection — authentication is not enabled.</p>
+      </main>
+    );
+  }
 
-function Admin({ tickets }) {
-  const total = tickets.length;
-  const resolved = tickets.filter(t => t.status === "Resolved").length;
-  const breached = tickets.filter(t => getSlaLabel(t) === "SLA BREACHED").length;
-  const priorities = ["P1", "P2", "P3", "P4"];
+  const visibleTickets =
+    role === "Employee"
+      ? tickets.filter((t) => t.createdBy === "Employee" || t.createdBy === "Madhushree")
+      : tickets;
 
   return (
-    <>
-      <PageHeader eyebrow="ADMINISTRATION" title="Service desk overview" description="Monitor operational performance, SLA compliance and workload." action={<button className="primary-btn" onClick={() => window.print()}>+ Create Report</button>} />
-      <div className="stats-grid four">
-        <Stat title="Total Tickets" value={total} change="All tickets" icon="▤" type="blue" />
-        <Stat title="Active Tickets" value={total - resolved} change="Across all queues" icon="◉" type="purple" />
-        <Stat title="SLA Compliance" value={total ? `${Math.round(((total - breached) / total) * 100)}%` : "100%"} change="Current performance" icon="✓" type="green" />
-        <Stat title="SLA Breached" value={breached} change="Needs attention" icon="!" type="red" />
-      </div>
+    <div style={styles.app}>
+      <header style={styles.header}>
+        <div>
+          <h2 style={{ margin: 0 }}>SmartDesk</h2>
+          <small>{role} workspace</small>
+        </div>
+        <AppButton secondary onClick={() => {
+          setRole(null);
+          setError("");
+        }}>
+          Switch role / Logout
+        </AppButton>
+      </header>
 
-      <div className="dashboard-grid">
-        <div className="panel">
-          <div className="panel-head"><div><h3>Ticket volume</h3><p>Requests processed over time</p></div></div>
-          <div className="fake-chart">
-            <div className="chart-y"><span>40</span><span>30</span><span>20</span><span>10</span><span>0</span></div>
-            <div className="chart-area"><div className="chart-line line-one" /><div className="chart-line line-two" /><div className="chart-bars">{[32,45,28,58,42,67,50,74,55,81,61,76].map((h,i) => <div key={i} style={{height:`${h}%`}} />)}</div></div>
+      <nav style={styles.nav}>
+        {["dashboard", "tickets", ...(role === "Admin" ? ["analytics"] : [])].map((p) => (
+          <button
+            key={p}
+            style={page === p ? styles.activeNav : styles.navButton}
+            onClick={() => setPage(p)}
+          >
+            {p[0].toUpperCase() + p.slice(1)}
+          </button>
+        ))}
+      </nav>
+
+      <main style={styles.main}>
+        {error && (
+          <div role="alert" style={styles.error}>
+            {error}
+            <button onClick={() => setError("")}>Dismiss</button>
           </div>
-          <div className="chart-labels"><span>Sep 1</span><span>Sep 7</span><span>Sep 14</span><span>Sep 21</span><span>Sep 30</span></div>
-        </div>
-        <div className="panel">
-          <div className="panel-head"><div><h3>Priority distribution</h3><p>Current ticket mix</p></div></div>
-          <div className="priority-chart">
-            {priorities.map(p => {
-              const count = tickets.filter(t => t.priority === p).length;
-              const percent = total ? Math.max(8, count / total * 100) : 8;
-              return <div className="priority-item" key={p}><div><Badge type={p.toLowerCase()}>{p}</Badge><span>{count} tickets</span></div><div className="progress"><i className={`progress-${p.toLowerCase()}`} style={{width:`${percent}%`}} /></div></div>;
-            })}
-          </div>
-        </div>
-      </div>
+        )}
 
-      <div className="section-heading"><div><h3>Recent tickets</h3><p>Latest activity across the service desk.</p></div></div>
-      <div className="ticket-table">
-        <div className="table-head"><span>Ticket</span><span>Priority</span><span>Status</span><span>SLA</span><span>Technician</span><span /></div>
-        {tickets.length === 0 ? <div className="empty">No tickets available.</div> : tickets.slice(0, 8).map(ticket => <TicketRow key={ticket.id} ticket={ticket} admin />)}
-      </div>
-    </>
-  );
-}
+        {loading ? (
+          <p>Loading tickets...</p>
+        ) : (
+          <>
+            {page === "dashboard" && (
+              <>
+                <h1>
+                  {role === "Employee" ? "Create a ticket" :
+                    role === "Technician" ? "Technician queue" : "Admin overview"}
+                </h1>
 
-function Login({ onLogin }) {
-  return (
-    <div className="login">
-      <div className="login-decoration decoration-one" /><div className="login-decoration decoration-two" />
-      <div className="login-card">
-        <div className="login-brand"><div className="brand-mark">S</div><div><strong>SmartDesk</strong><span>IT SERVICE MANAGEMENT</span></div></div>
-        <div className="login-copy"><div className="eyebrow">WELCOME BACK</div><h1>Support, simplified.</h1><p>Choose your workspace to continue to the SmartDesk portal.</p></div>
-        <div className="role-options">
-          <button onClick={() => onLogin("Employee")}><span className="role-icon blue">♙</span><span><b>Employee</b><small>Raise and track requests</small></span><i>→</i></button>
-          <button onClick={() => onLogin("Technician")}><span className="role-icon purple">⚡</span><span><b>Technician</b><small>Manage support queue</small></span><i>→</i></button>
-          <button onClick={() => onLogin("Admin")}><span className="role-icon green">▦</span><span><b>Administrator</b><small>Monitor service operations</small></span><i>→</i></button>
-        </div>
-        <div className="login-footer"><span>● All systems operational</span><span>SmartDesk v1.0</span></div>
-      </div>
+                <div style={styles.stats}>
+                  <StatBox label="Total tickets" value={tickets.length} />
+                  <StatBox label="Active tickets" value={active} />
+                  <StatBox label="Resolved / Closed" value={resolved} />
+                  <StatBox label="SLA breached" value={breached} />
+                </div>
+
+                {role === "Employee" && (
+                  <form onSubmit={createTicket} style={styles.form}>
+                    <h3>New support request</h3>
+
+                    <label>Issue title
+                      <input
+                        value={form.title}
+                        onChange={(e) => setForm({ ...form, title: e.target.value })}
+                        placeholder="e.g. Wi-Fi is not working"
+                      />
+                    </label>
+
+                    <label>Category
+                      <select
+                        value={form.category}
+                        onChange={(e) => setForm({ ...form, category: e.target.value })}
+                      >
+                        {["Hardware", "Software", "Network", "Access", "General"].map((x) => (
+                          <option key={x}>{x}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>Impact
+                      <select
+                        value={form.impact}
+                        onChange={(e) => setForm({ ...form, impact: e.target.value })}
+                      >
+                        {["Low", "Medium", "High"].map((x) => <option key={x}>{x}</option>)}
+                      </select>
+                    </label>
+
+                    <label>Urgency
+                      <select
+                        value={form.urgency}
+                        onChange={(e) => setForm({ ...form, urgency: e.target.value })}
+                      >
+                        {["Low", "Medium", "High"].map((x) => <option key={x}>{x}</option>)}
+                      </select>
+                    </label>
+
+                    <p>
+                      Calculated priority: <strong>{priorityFrom(form.impact, form.urgency)}</strong>
+                    </p>
+
+                    <label>Description
+                      <textarea
+                        rows={4}
+                        value={form.description}
+                        onChange={(e) => setForm({ ...form, description: e.target.value })}
+                        placeholder="Describe the issue..."
+                      />
+                    </label>
+
+                    <button className="primary-btn" type="submit">
+                      Submit ticket
+                    </button>
+                  </form>
+                )}
+
+                {role === "Technician" && (
+                  <p>Assign technicians and change ticket statuses below or in All Tickets.</p>
+                )}
+
+                {role === "Admin" && (
+                  <p>Monitor all tickets, assignments, priorities and SLA performance.</p>
+                )}
+
+                <h2>{role === "Employee" ? "My requests" : "Recent tickets"}</h2>
+                {visibleTickets.slice(0, 5).map(ticketCard)}
+                {visibleTickets.length === 0 && <p>No tickets found.</p>}
+              </>
+            )}
+
+            {page === "tickets" && (
+              <>
+                <h1>{role === "Employee" ? "My tickets" : "All tickets"}</h1>
+                <p>
+                  {role === "Technician"
+                    ? "Assign technicians and update statuses below."
+                    : role === "Admin"
+                      ? "Monitor all requests and operational status."
+                      : "Track your support requests."}
+                </p>
+                {visibleTickets.map(ticketCard)}
+                {visibleTickets.length === 0 && <p>No tickets found.</p>}
+              </>
+            )}
+
+            {page === "analytics" && role === "Admin" && (
+              <>
+                <h1>Service analytics</h1>
+                <div style={styles.stats}>
+                  <StatBox label="Total tickets" value={tickets.length} />
+                  <StatBox label="Open / active" value={active} />
+                  <StatBox label="Resolved / closed" value={resolved} />
+                  <StatBox label="SLA breached" value={breached} />
+                </div>
+                <h2>Ticket status breakdown</h2>
+                {STATUSES.map((status) => (
+                  <p key={status}>
+                    {status}: {tickets.filter((t) => t.status === status).length}
+                  </p>
+                ))}
+                <h2>Technician workload</h2>
+                {TECHNICIANS.slice(1).map((tech) => (
+                  <p key={tech}>
+                    {tech}: {tickets.filter((t) => t.technician === tech).length} tickets
+                  </p>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </main>
     </div>
   );
 }
 
-export default function App() {
-  const [role, setRole] = useState(null);
-  const [page, setPage] = useState("dashboard");
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const refreshTickets = async () => {
-    const data = await apiRequest("/api/tickets");
-    setTickets(data.map(normalizeTicket));
-  };
+function ResolutionEditor({ ticket, saving, onSave }) {
+  const [resolution, setResolution] = useState(ticket.resolution || "");
 
   useEffect(() => {
-    refreshTickets()
-      .catch(error => {
-        console.error(error);
-        alert("Could not load tickets from the server. Please refresh the page.");
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  const createTicket = async (ticketData) => {
-    const saved = await apiRequest("/api/tickets", {
-      method: "POST",
-      body: JSON.stringify(ticketData),
-    });
-    setTickets(current => [normalizeTicket(saved), ...current]);
-  };
-
-  const updateTicket = async (id, changes) => {
-    const saved = await apiRequest(`/api/tickets/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(changes),
-    });
-    const normalized = normalizeTicket(saved);
-    setTickets(current => current.map(ticket => ticket.id === id ? normalized : ticket));
-  };
-
-  const dashboard = useMemo(() => {
-    if (role === "Employee") {
-      return <Employee tickets={tickets} createTicket={createTicket} setPage={setPage} />;
-    }
-    if (role === "Technician") {
-      return <Technician tickets={tickets} updateTicket={updateTicket} />;
-    }
-    return <Admin tickets={tickets} />;
-  }, [role, tickets]);
-
-  if (!role) return <Login onLogin={r => { setRole(r); setPage("dashboard"); }} />;
+    setResolution(ticket.resolution || "");
+  }, [ticket.resolution]);
 
   return (
-    <Layout role={role} page={page} setPage={setPage} onLogout={() => setRole(null)}>
-      {loading ? <div className="empty">Loading tickets from database...</div> : <>
-        {page === "dashboard" && dashboard}
-
-        {page === "tickets" && <>
-          <PageHeader eyebrow="TICKET MANAGEMENT" title="All tickets" description="Search, monitor and manage service requests." action={<button className="primary-btn" onClick={() => setPage("dashboard")}>+ New Ticket</button>} />
-          <div className="ticket-table">
-            <div className="table-head"><span>Ticket</span><span>Priority</span><span>Status</span><span>SLA</span><span>Technician</span><span /></div>
-            {tickets.length === 0 ? <div className="empty">No tickets available.</div> : tickets.map(ticket => <TicketRow key={ticket.id} ticket={ticket} admin />)}
-          </div>
-        </>}
-
-        {page === "analytics" && <>
-          <PageHeader eyebrow="ANALYTICS" title="Service analytics" description="Understand ticket volume, SLA performance and resolution trends." />
-          <div className="stats-grid four">
-            <Stat title="Total Requests" value={tickets.length} change="All time" icon="▤" type="blue" />
-            <Stat title="Resolved" value={tickets.filter(t => t.status === "Resolved").length} change="Completed" icon="✓" type="green" />
-            <Stat title="P1 Incidents" value={tickets.filter(t => t.priority === "P1").length} change="Critical priority" icon="!" type="red" />
-            <Stat title="Active" value={tickets.filter(t => t.status !== "Resolved").length} change="Currently open" icon="◉" type="purple" />
-          </div>
-          <div className="dashboard-grid">
-            <div className="panel large-panel"><h3>Performance overview</h3><div className="big-metric">98<span>%</span></div><p>SLA compliance target</p><div className="large-progress"><i style={{width:"98%"}} /></div></div>
-            <div className="panel"><h3>Average resolution time</h3><div className="big-metric">3.8<span>h</span></div><p>Average MTTR</p><div className="mini-bars">{[30,45,38,62,50,72,56].map((h,i) => <i key={i} style={{height:`${h}%`}} />)}</div></div>
-          </div>
-        </>}
-
-        {page === "users" && <>
-          <PageHeader eyebrow="USER MANAGEMENT" title="Users & teams" description="Manage service desk roles and technician assignments." />
-          <div className="user-grid">{["Madhushree","Technician A","Technician B","Technician C"].map((name,i) => <div className="user-card" key={name}><div className="user-avatar">{name.split(" ").map(x => x[0]).join("").slice(0,2)}</div><h3>{name}</h3><p>{i === 0 ? "Employee" : "Technician"}</p><Badge type="resolved">Active</Badge></div>)}</div>
-        </>}
-
-        {page === "settings" && <>
-          <PageHeader eyebrow="SYSTEM SETTINGS" title="Settings" description="Configure SmartDesk workspace preferences." />
-          <div className="settings-panel">
-            <div><b>SLA monitoring</b><span>Real-time SLA countdown and breach detection</span></div><label className="toggle"><input type="checkbox" defaultChecked /><i /></label>
-            <div><b>Automatic priority calculation</b><span>Calculate P1–P4 based on impact and urgency</span></div><label className="toggle"><input type="checkbox" defaultChecked /><i /></label>
-            <div><b>Notifications</b><span>Receive updates about ticket activity</span></div><label className="toggle"><input type="checkbox" defaultChecked /><i /></label>
-          </div>
-        </>}
-      </>}
-    </Layout>
+    <div style={{ marginTop: 12 }}>
+      <label>Resolution notes
+        <textarea
+          rows={2}
+          value={resolution}
+          onChange={(e) => setResolution(e.target.value)}
+          placeholder="Describe the fix..."
+        />
+      </label>
+      <button
+        className="primary-btn"
+        disabled={saving || !resolution.trim()}
+        onClick={() => onSave(resolution.trim())}
+      >
+        {saving ? "Saving..." : "Save resolution & resolve"}
+      </button>
+    </div>
   );
 }
+
+function StatBox({ label, value }) {
+  return (
+    <div style={styles.stat}>
+      <small>{label}</small>
+      <h2>{value}</h2>
+    </div>
+  );
+}
+
+const styles = {
+  app: {
+    minHeight: "100vh",
+    background: "#f5f7fc",
+    color: "#20243a",
+    fontFamily: "Inter, Arial, sans-serif",
+  },
+  header: {
+    padding: "20px 5%",
+    background: "#fff",
+    borderBottom: "1px solid #e2e6ef",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  nav: {
+    display: "flex",
+    gap: 10,
+    padding: "12px 5%",
+    background: "#fff",
+    borderBottom: "1px solid #e2e6ef",
+    flexWrap: "wrap",
+  },
+  navButton: {
+    padding: "10px 16px",
+    border: "1px solid #dce1ee",
+    background: "#fff",
+    borderRadius: 8,
+    cursor: "pointer",
+  },
+  activeNav: {
+    padding: "10px 16px",
+    border: "1px solid #4f46e5",
+    background: "#4f46e5",
+    color: "#fff",
+    borderRadius: 8,
+    cursor: "pointer",
+  },
+  main: {
+    maxWidth: 1100,
+    margin: "0 auto",
+    padding: "28px 20px 60px",
+  },
+  stats: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gap: 14,
+    margin: "20px 0 30px",
+  },
+  stat: {
+    background: "#fff",
+    border: "1px solid #e1e5ef",
+    borderRadius: 12,
+    padding: 18,
+  },
+  form: {
+    background: "#fff",
+    border: "1px solid #e1e5ef",
+    borderRadius: 12,
+    padding: 20,
+    margin: "20px 0 30px",
+    display: "grid",
+    gap: 14,
+  },
+  login: {
+    minHeight: "100vh",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+    background: "#f5f7fc",
+    color: "#20243a",
+  },
+  roleButton: {
+    width: "min(320px, 90vw)",
+    margin: 8,
+    padding: 16,
+    borderRadius: 10,
+    border: "1px solid #dce1ee",
+    background: "#fff",
+    cursor: "pointer",
+    fontSize: 16,
+  },
+  error: {
+    padding: 14,
+    background: "#fff0f0",
+    color: "#a32020",
+    borderRadius: 8,
+    marginBottom: 20,
+  },
+};
+
+export default App;
